@@ -3,49 +3,149 @@ import numpy as np
 import os
 from torchvision import transforms
 
-def enhance_water_features(image):
-    # Step 1: Contrast and brightness enhancement (preserve natural colors)
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
-    enhanced_image = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+import cv2
+import numpy as np
+import scipy.ndimage as ndi
 
-    def adjust_gamma(image, gamma=1.2):
-        inv_gamma = 1.0 / gamma
-        table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
-        return cv2.LUT(image, table)
-
-    enhanced_image = adjust_gamma(enhanced_image)
-
-    # Step 2: Extract water-relevant channels
-    hsv = cv2.cvtColor(enhanced_image, cv2.COLOR_BGR2HSV)
-    lab = cv2.cvtColor(enhanced_image, cv2.COLOR_BGR2LAB)
-
-    # Water-related features
-    saturation = hsv[:, :, 1]  # High saturation for water
-    blue_channel = lab[:, :, 2]  # Blue-ish tones in 'b' channel of Lab space
-
-    # Normalize blue channel and saturation
-    blue_channel_normalized = cv2.normalize(blue_channel, None, 0, 255, cv2.NORM_MINMAX)
-    saturation_normalized = cv2.normalize(saturation, None, 0, 255, cv2.NORM_MINMAX)
-
-    # Step 3: Edge detection (Laplacian)
-    laplacian_edges = cv2.Laplacian(saturation, cv2.CV_64F)
-    laplacian_edges = cv2.convertScaleAbs(laplacian_edges)
-
-    # Step 4: Blend features while preserving original colors
-    # Combine blue channel and saturation as a mask
-    water_mask = cv2.addWeighted(blue_channel_normalized, 0.5, saturation_normalized, 0.5, 0)
-
-    # Enhance original image using the water mask
-    water_mask_colored = cv2.cvtColor(water_mask, cv2.COLOR_GRAY2BGR)
-    enhanced_with_mask = cv2.addWeighted(enhanced_image, 0.8, water_mask_colored, 0.2, 0)
-
-    # Add edge enhancement
-    laplacian_colored = cv2.cvtColor(laplacian_edges, cv2.COLOR_GRAY2BGR)
-    final_combined = cv2.addWeighted(enhanced_with_mask, 0.9, laplacian_colored, 0.1, 0)
-
-    return final_combined
+def enhance_water_features(image, debug=False):
+    """
+    Advanced color-preserving preprocessing pipeline for water surface segmentation.
+    
+    Parameters:
+    -----------
+    image : numpy.ndarray
+        Input image opened with cv2.imread()
+    debug : bool, optional
+        If True, will display intermediate processing steps
+    
+    Returns:
+    --------
+    tuple
+        (enhanced_image, enhanced_mask)
+        enhanced_image: Color image with enhanced features
+        enhanced_mask: Grayscale segmentation-ready mask
+    """
+    # Ensure input is a valid image
+    if image is None or image.size == 0:
+        raise ValueError("Invalid input image")
+    
+    # Convert BGR to RGB (cv2 uses BGR by default)
+    img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    # Convert to different color spaces
+    img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    img_lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    
+    # Separate channels
+    h, s, v = cv2.split(img_hsv)
+    l, a, b = cv2.split(img_lab)
+    
+    # Debug: original image
+    if debug:
+        plt.figure(figsize=(15,10))
+        plt.subplot(3,3,1)
+        plt.title('Original Image')
+        plt.imshow(img_rgb)
+        plt.axis('off')
+    
+    # 1. Color-Aware Contrast Enhancement
+    # CLAHE on Value and Lightness channels
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    v_enhanced = clahe.apply(v)
+    l_enhanced = clahe.apply(l)
+    
+    # Debug: CLAHE enhanced channels
+    if debug:
+        plt.subplot(3,3,2)
+        plt.title('CLAHE V Channel')
+        plt.imshow(v_enhanced, cmap='gray')
+        plt.axis('off')
+        
+        plt.subplot(3,3,3)
+        plt.title('CLAHE L Channel')
+        plt.imshow(l_enhanced, cmap='gray')
+        plt.axis('off')
+    
+    # 2. Color-Based Water Surface Detection
+    # Use color differences and saturation to highlight water
+    water_mask = np.zeros_like(s)
+    
+    # Adaptive thresholding on saturation and color channels
+    _, sat_thresh = cv2.threshold(s, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, blue_thresh = cv2.threshold(b, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Combine thresholds
+    water_mask = cv2.bitwise_and(sat_thresh, blue_thresh)
+    
+    # Debug: color-based masks
+    if debug:
+        plt.subplot(3,3,4)
+        plt.title('Saturation Threshold')
+        plt.imshow(sat_thresh, cmap='gray')
+        plt.axis('off')
+        
+        plt.subplot(3,3,5)
+        plt.title('Blue Channel Threshold')
+        plt.imshow(blue_thresh, cmap='gray')
+        plt.axis('off')
+        
+        plt.subplot(3,3,6)
+        plt.title('Combined Water Mask')
+        plt.imshow(water_mask, cmap='gray')
+        plt.axis('off')
+    
+    # 3. Gradient and Edge Enhancement
+    # Sobel operators on enhanced lightness channel
+    sobelx = cv2.Sobel(l_enhanced, cv2.CV_64F, 1, 0, ksize=3)
+    sobely = cv2.Sobel(l_enhanced, cv2.CV_64F, 0, 1, ksize=3)
+    
+    # Compute gradient magnitude
+    gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+    gradient_magnitude = cv2.normalize(gradient_magnitude, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    
+    # 4. Morphological Operations
+    # Enhance water surface features
+    kernel = np.ones((3,3), np.uint8)
+    water_mask_processed = cv2.morphologyEx(water_mask, cv2.MORPH_CLOSE, kernel)
+    water_mask_processed = cv2.morphologyEx(water_mask_processed, cv2.MORPH_OPEN, kernel)
+    
+    # 5. Combine Masks
+    enhanced_mask = cv2.addWeighted(
+        water_mask_processed, 0.6,
+        gradient_magnitude, 0.4,
+        0
+    )
+    
+    # Normalize mask
+    enhanced_mask = cv2.normalize(
+        enhanced_mask, 
+        None, 
+        0, 255, 
+        cv2.NORM_MINMAX, 
+        dtype=cv2.CV_8U
+    )
+    
+    # 6. Color-Preserved Enhancement
+    # Reconstruct enhanced color image
+    img_hsv_enhanced = cv2.merge([h, s, v_enhanced])
+    img_rgb_enhanced = cv2.cvtColor(img_hsv_enhanced, cv2.COLOR_HSV2RGB)
+    
+    # Debug: final results
+    if debug:
+        plt.subplot(3,3,7)
+        plt.title('Enhanced Mask')
+        plt.imshow(enhanced_mask, cmap='gray')
+        plt.axis('off')
+        
+        plt.subplot(3,3,8)
+        plt.title('Enhanced Color Image')
+        plt.imshow(img_rgb_enhanced)
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    return img_rgb_enhanced
 
 def preprocess_for_water(image_path):
     """
