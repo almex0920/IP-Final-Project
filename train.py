@@ -33,7 +33,7 @@ class WaterSegmentationDataset(Dataset):
         # Load and convert without resizing
         if self.transform:
             image = self.transform(image)
-            image = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(image)
+            # image = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(image)
             mask = self.transform(mask)
             if random.random() > 0.5:
                 image = F.hflip(image)
@@ -54,22 +54,52 @@ class WaterSegmentationDataset(Dataset):
         
         return image, mask
     
-class DiceBCELoss(nn.Module):
-    def __init__(self, weight=0.5):
-        super().__init__()
-        self.bce = nn.BCELoss()
+class BCEDiceLoss(nn.Module):
+    """
+    Combined Binary Cross-Entropy and Soft Dice Loss for image segmentation.
+    
+    Args:
+        weight (float): Weight for BCE loss (default: 1.0)
+        dice_weight (float): Weight for Dice loss (default: 1.0)
+        smooth (float): Small smoothing constant to avoid division by zero (default: 1e-7)
+    """
+    def __init__(self, weight=1.0, dice_weight=1.0, smooth=1e-7):
+        super(BCEDiceLoss, self).__init__()
         self.weight = weight
+        self.dice_weight = dice_weight
+        self.smooth = smooth
+    
+    def forward(self, inputs, targets):
+        """
+        Compute combined BCE and Soft Dice Loss.
         
-    def forward(self, pred, target):
-        bce_loss = self.bce(pred, target)
+        Args:
+            inputs (torch.Tensor): Model predictions (sigmoid output)
+            targets (torch.Tensor): Ground truth binary masks
         
-        # Dice Loss
-        smooth = 1e-5
-        intersection = (pred * target).sum()
-        dice_loss = 1 - (2. * intersection + smooth)/(pred.sum() + target.sum() + smooth)
+        Returns:
+            torch.Tensor: Combined loss value
+        """
+        # Binary Cross-Entropy Loss
+        bce_loss = nn.functional.binary_cross_entropy(inputs, targets)
+        
+        # Soft Dice Loss
+        # Flatten predictions and targets
+        inputs_flat = inputs.view(-1)
+        targets_flat = targets.view(-1)
+        
+        # Compute intersection and union
+        intersection = (inputs_flat * targets_flat).sum()
+        
+        # Soft Dice Loss calculation
+        dice_loss = 1 - (2. * intersection + self.smooth) / \
+                    (inputs_flat.sum() + targets_flat.sum() + self.smooth)
         
         # Combine losses
-        return self.weight * bce_loss + (1 - self.weight) * dice_loss
+        combined_loss = (self.weight * bce_loss) + (self.dice_weight * dice_loss)
+        
+        return combined_loss
+
 
 class IoULoss(nn.Module):
     def __init__(self, 
@@ -206,11 +236,11 @@ def main():
     batch_size = 5
     num_epochs = 100
     learning_rate = 1e-4
-    val_split = 0.1  # 20% for validation
+    val_split = 0.2  # 20% for validation
     
     # Data transforms
     transform = transforms.Compose([
-        transforms.Resize((256, 256), interpolation=transforms.InterpolationMode.BILINEAR),
+        transforms.Resize((512, 512), interpolation=transforms.InterpolationMode.NEAREST_EXACT),
         transforms.ToTensor(),
         # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -242,9 +272,9 @@ def main():
     
     # Initialize model, criterion, and optimizer
     model = UNet().to(device)
-    criterion = nn.BCELoss()
+    criterion = BCEDiceLoss()
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5, amsgrad=True)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.5, patience=10)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.5, patience=5)
 
     # Create checkpoint directory if it doesn't exist
     os.makedirs('checkpoint', exist_ok=True)
