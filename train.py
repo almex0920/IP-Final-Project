@@ -8,7 +8,7 @@ from PIL import Image
 import numpy as np
 import random
 from tqdm import tqdm
-from model import UNet
+from model import UNet, WaterSegmentationUNet
 import torchvision.transforms.functional as F
 # Custom Dataset class
 class WaterSegmentationDataset(Dataset):
@@ -217,7 +217,7 @@ def main():
     dir_mask = 'training_dataset/mask'
     
     # Hyperparameters
-    batch_size = 5
+    batch_size = 4
     num_epochs = 100
     learning_rate = 1e-4
     val_split = 0.2  # 20% for validation
@@ -255,8 +255,8 @@ def main():
                           shuffle=False, num_workers=4, drop_last=False)
     
     # Initialize model, criterion, and optimizer
-    model = UNet().to(device)
-    criterion = DiceLoss()
+    model = WaterSegmentationUNet().to(device)
+    criterion = nn.BCELoss()
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, amsgrad=True)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.1, patience=5)
 

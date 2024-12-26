@@ -7,7 +7,7 @@ from torchvision import transforms
 from PIL import Image
 import numpy as np
 from tqdm import tqdm
-from model import UNet
+from model import UNet, WaterSegmentationUNet
 
 def predict_images(model, input_dir, output_dir, device):
     """
@@ -68,13 +68,13 @@ def main():
     print(f"Using device: {device}")
     
     # Paths
-    # checkpoint_path = 'checkpoint/best_model.pth'  # Path to your checkpoint
-    checkpoint_path = 'checkpoint/model_epoch_58.pth'
+    checkpoint_path = 'checkpoint/best_model.pth'  # Path to your checkpoint
+    # checkpoint_path = 'checkpoint/model_epoch_21.pth'
     input_dir = 'testing_dataset/preprocessed'  # Directory containing images to predict
     output_dir = 'testing_dataset/output'  # Directory to save predictions
     
     # Initialize model
-    model = UNet().to(device)
+    model = WaterSegmentationUNet().to(device)
     
     # Load checkpoint
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
