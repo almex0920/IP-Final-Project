@@ -142,6 +142,46 @@ class DiceLoss(nn.Module):
         
         
         return dice_loss
+    
+class IoULoss(nn.Module):
+    """
+    Combined Binary Cross-Entropy and Soft Dice Loss for image segmentation.
+    
+    Args:
+        weight (float): Weight for BCE loss (default: 1.0)
+        dice_weight (float): Weight for Dice loss (default: 1.0)
+        smooth (float): Small smoothing constant to avoid division by zero (default: 1e-7)
+    """
+    def __init__(self, smooth=1e-8):
+        super(IoULoss, self).__init__()
+        self.smooth = smooth
+    
+    def forward(self, inputs, targets):
+        """
+        Compute combined BCE and Soft Dice Loss.
+        
+        Args:
+            inputs (torch.Tensor): Model predictions (sigmoid output)
+            targets (torch.Tensor): Ground truth binary masks
+        
+        Returns:
+            torch.Tensor: Combined loss value
+        """
+        
+        # Soft Dice Loss
+        # Flatten predictions and targets
+        inputs_flat = inputs.view(-1)
+        targets_flat = targets.view(-1)
+        
+        # Compute intersection and union
+        intersection = (inputs_flat * targets_flat).sum()
+        
+        # Soft Dice Loss calculation
+        dice_loss = 1 - (intersection + self.smooth) / \
+                    (inputs_flat.sum() + targets_flat.sum() - intersection + self.smooth)
+        
+        
+        return dice_loss
 
 # Training function
 def train_model(model, train_loader, criterion, optimizer, device, epoch):
@@ -218,13 +258,13 @@ def main():
     
     # Hyperparameters
     batch_size = 4
-    num_epochs = 100
+    num_epochs = 500
     learning_rate = 1e-4
     val_split = 0.2  # 20% for validation
     
     # Data transforms
     transform = transforms.Compose([
-        transforms.Resize((256, 256), interpolation=transforms.InterpolationMode.NEAREST_EXACT),
+        transforms.Resize((128, 128), interpolation=transforms.InterpolationMode.NEAREST_EXACT),
         transforms.ToTensor(),
         # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -255,10 +295,10 @@ def main():
                           shuffle=False, num_workers=4, drop_last=False)
     
     # Initialize model, criterion, and optimizer
-    model = WaterSegmentationUNet().to(device)
-    criterion = nn.BCELoss()
+    model = UNet().to(device)
+    criterion = DiceLoss()
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, amsgrad=True)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.1, patience=5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, mode='min', factor=0.1, patience=10)
 
     # Create checkpoint directory if it doesn't exist
     os.makedirs('checkpoint', exist_ok=True)

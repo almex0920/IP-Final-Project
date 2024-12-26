@@ -2,10 +2,8 @@ import cv2
 import numpy as np
 import os
 from torchvision import transforms
-
-import cv2
-import numpy as np
 import scipy.ndimage as ndi
+import matplotlib.pyplot as plt
 
 def enhance_water_features(image, debug=False):
     """
