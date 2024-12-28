@@ -26,7 +26,18 @@ def enhance_water_features(image, debug=False):
     # Ensure input is a valid image
     if image is None or image.size == 0:
         raise ValueError("Invalid input image")
-    
+    b,g,r = cv2.split(image)
+    b_avg = cv2.mean(b)[0]
+    g_avg = cv2.mean(g)[0]
+    r_avg = cv2.mean(r)[0]
+    avg = (b_avg + g_avg + r_avg ) / 3.0
+    b_k = avg/b_avg
+    g_k = avg/g_avg
+    r_k = avg/r_avg
+    b = (b*b_k).clip(0, 255)
+    g = (g*g_k).clip(0, 255)
+    r = (r*r_k).clip(0, 255)
+    image = cv2.merge([b, g, r]).astype(np.uint8)
     # Convert BGR to RGB (cv2 uses BGR by default)
     img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     
@@ -37,7 +48,7 @@ def enhance_water_features(image, debug=False):
     # Separate channels
     h, s, v = cv2.split(img_hsv)
     l, a, b = cv2.split(img_lab)
-    
+
     # Debug: original image
     if debug:
         plt.figure(figsize=(15,10))
@@ -69,7 +80,8 @@ def enhance_water_features(image, debug=False):
     water_mask = np.zeros_like(s)
     
     # Adaptive thresholding on saturation and color channels
-    _, sat_thresh = cv2.threshold(s, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, sat_thresh = cv2.threshold(s, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    b, _, _ = cv2.split(image)
     _, blue_thresh = cv2.threshold(b, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
     # Combine thresholds
@@ -127,12 +139,14 @@ def enhance_water_features(image, debug=False):
     # Reconstruct enhanced color image
     img_hsv_enhanced = cv2.merge([h, s, v_enhanced])
     img_rgb_enhanced = cv2.cvtColor(img_hsv_enhanced, cv2.COLOR_HSV2RGB)
+
+
     
     # Debug: final results
     if debug:
         plt.subplot(3,3,7)
         plt.title('Enhanced Mask')
-        plt.imshow(enhanced_mask, cmap='gray')
+        plt.imshow(enhanced_mask)
         plt.axis('off')
         
         plt.subplot(3,3,8)
@@ -141,9 +155,57 @@ def enhance_water_features(image, debug=False):
         plt.axis('off')
         
         plt.tight_layout()
+       
+
+    _, final_mask = cv2.threshold(enhanced_mask, 127, 255, cv2.THRESH_BINARY)
+    
+    # 2. Apply mask to the enhanced image
+    # Option A: Direct masking for water region emphasis
+    masked_enhancement = cv2.bitwise_and(img_rgb_enhanced, img_rgb_enhanced, mask=final_mask)
+    
+    # Option B: Blend the masked region with original for subtle enhancement
+    alpha = 0.7  # Adjust this value to control enhancement strength
+    mask_3ch = cv2.cvtColor(final_mask, cv2.COLOR_GRAY2RGB) / 255.0
+    blended_result = (img_rgb_enhanced * alpha * mask_3ch + 
+                     img_rgb * (1 - alpha * mask_3ch))
+    blended_result = np.uint8(blended_result)
+    
+    # 3. Feature Enhancement in masked regions
+    # Enhance blue channel in water regions
+    b, g, r = cv2.split(img_rgb)
+    b_enhanced = cv2.addWeighted(
+        b, 1.2,  # Increase blue channel intensity
+        np.zeros_like(b), 0,
+        5  # Add slight brightness
+    )
+    
+    # Only apply enhancement in masked regions
+    b_final = np.where(final_mask == 255, b_enhanced, b)
+    
+    # Reconstruct the image with enhanced water features
+    result = cv2.merge([b_final, g, r])
+    
+    # Debug visualization
+    if debug:
+        plt.subplot(3,3,7)
+        plt.title('Enhanced Mask')
+        plt.imshow(enhanced_mask, cmap='gray')
+        plt.axis('off')
+        
+        plt.subplot(3,3,8)
+        plt.title('Masked Enhancement')
+        plt.imshow(cv2.cvtColor(masked_enhancement, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+        
+        plt.subplot(3,3,9)
+        plt.title('Final Result')
+        plt.imshow(result)
+        plt.axis('off')
+        
+        plt.tight_layout()
         plt.show()
     
-    return img_rgb_enhanced
+    return cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
 
 def preprocess_for_water(image_path):
     """
@@ -175,6 +237,7 @@ if __name__ == "__main__":
       cv2.imwrite(os.path.join(output_dir, f"{os.path.splitext(image_path)[0]}.png"), processed)
     input_dir = 'testing_dataset/image'  # Directory containing images to predict
     output_dir = 'testing_dataset/preprocessed'  # Directory to save predictions
+    predict_dir = 'testing_dataset/output'
     os.makedirs(output_dir, exist_ok=True)
     image_files = [f for f in os.listdir(input_dir)]
     for image_path in image_files:
